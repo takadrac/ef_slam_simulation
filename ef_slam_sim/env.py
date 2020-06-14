@@ -1,3 +1,4 @@
+import getpass
 import numpy as np
 import os
 import pandas as pd
@@ -12,24 +13,37 @@ class Robot(object):
     def __init__(self):
         p.connect(p.GUI)
         # p.setGravity(0, 0, -9.8)
-        self.load_robot('/home/taka/git/pybullet-playground/urdf/', 'ur5.urdf')
+        self.user_name = getpass.getuser()
+        self.load_robot('/home/{}/git/pybullet-playground/urdf/'.format(self.user_name), 'ur5.urdf')
         '''
-        kuka: '/home/taka/git/bullet3/data/kuka_lwr/', 'kuka.urdf'
-        ur5: '/home/taka/git/pybullet-playground/urdf/', 'ur5.urdf'
+        kuka: '/home/{}}/git/bullet3/data/kuka_lwr/', 'kuka.urdf'
+        ur5: '/home/{}/git/pybullet-playground/urdf/', 'ur5.urdf'
+        ur5: '/home/{}/catkin_ws/src/universal_robot/ur_description/urdf', 'ur5_robot.urdf'
         '''
+        # import pdb; pdb.set_trace()
         self.estimated_joint_state = {}
         self.init_pybullet()
 
     def init_pybullet(self):
         self.enable_torque()
         self.get_joint_info()
-        self.command_ID()
+        # self.command_ID()
+        self.set_marker('/home/{}/git/bullet3/data/'.format(self.user_name), 'cube.urdf', 'markers0.png')
+
+    def set_marker(self, dir_path, file, pic_file):
+        tmp = os.getcwd()
+        os.chdir(dir_path)
+        # c = p.loadURDF(file, (0, 0, 1), useFixedBase=True)
+        c = p.loadURDF(file, (0, 1, 0), useFixedBase=True, globalScaling=0.1)
+        # for i in range(1, 6):
+        #     p.loadURDF(file, (0.2*i, 1, 0), useFixedBase=True, globalScaling=0.1)
+        os.chdir(tmp)
+        x = p.loadTexture(pic_file)
+        p.changeVisualShape(c, -1, textureUniqueId=x)
 
     def load_robot(self, dir_path, file):
         # TODO: multi-DOF joint robot
         tmp = os.getcwd()
-        # path = '/home/taka/git/bullet3/data/kuka_lwr/'
-        # file = 'kuka.urdf'
         os.chdir(dir_path)
         self.robot = p.loadURDF(file)
         os.chdir(tmp)
@@ -39,6 +53,42 @@ class Robot(object):
         for i in range(num_joint):
             if p.getJointInfo(self.robot, i)[2] != 4:
                 p.enableJointForceTorqueSensor(self.robot, i)
+
+    def set_camera(self):
+        # TODO: アーム先端部のworld座標
+
+        rot_mtrx = np.array(p.getMatrixFromQuaternion(self.link_info['ee_link'][1])).reshape(3, 3)
+
+
+        self.view_matrix = p.computeViewMatrix(
+            cameraEyePosition=np.array(self.link_info['ee_link'][0]),
+            cameraTargetPosition=np.array(self.link_info['ee_link'][0]) + rot_mtrx @ np.array([1, 0, 0]),
+            cameraUpVector=rot_mtrx @ np.array([0, 1, 0])
+        )
+
+        # self.view_matrix = p.computeViewMatrixFromYawPitchRoll(
+        #     cameraTargetPosition=np.array([0.5, -0.5, 1.5]) * 1/1,#np.array([4, -4, 3]) * 1/10, # target focus point
+        #     distance=2., # from eye to target
+        #     yaw=30, # degree left/right around z axis
+        #     pitch=-30, # degree up/down around
+        #     roll=90, # degree around forward vector
+        #     upAxisIndex=2) # either 1 for Y or 2 for Z axis up
+
+        # 表示のための投影マトリクス計算
+        self.proj_matrix = p.computeProjectionMatrixFOV(
+            fov=60, # the field of view angle, in degrees, in the y direction
+            aspect=320 / 240, # the aspect ratio that determines the field of view in the x direction. The aspect ratio is the ratio of x (width) to y (height).
+            nearVal=0.1, # the distance from the viewer to the near clipping plane (always positive)
+            farVal=100.0) # the distance from the viewer to the far clipping plane (always positive)
+
+    def get_image(self, img_W=512, img_H=512):
+        # 描画計算
+        (_, _, rgba_img, dpt_img, sgm_img) = p.getCameraImage(img_W, img_H, viewMatrix=self.view_matrix, projectionMatrix=self.proj_matrix,
+                                            renderer=p.ER_BULLET_HARDWARE_OPENGL)
+        print(np.array(rgba_img))
+        rgb_img = np.array(rgba_img).reshape(img_W, img_H, -1)[:, :, :3]
+        dpt_img = np.array(dpt_img).reshape(img_W, img_H, -1)
+        sgm_img = np.array(sgm_img).reshape(img_W, img_H, -1)
 
     def get_joint_info(self):
         num_joint = p.getNumJoints(self.robot)
@@ -75,7 +125,14 @@ class Robot(object):
 
         df = pd.DataFrame(self.link_info.values(), index=self.link_info.keys())
         # print(df.index)
-        print(df.loc[df.index[-1]][0])
+        print(df.loc[df.index[-1]][0]) # linkWorldPosition
+        # print(df.loc[df.index[-1]][1]) # linkWorldOrientation
+
+        # import ipdb; ipdb.set_trace()
+
+        # print(np.array(p.getMatrixFromQuaternion(df.loc[df.index[-1]][1])).reshape(3, 3))
+
+
         # print(np.array(p.getMatrixFromQuaternion(df.loc[df.index[-1]][1])).reshape(3, 3) @ np.array([1, 0, 0]))
 
     def command_ID(self):
@@ -109,7 +166,7 @@ class Robot(object):
         # print(self.estimated_joint_state[self.driven_joint_info[joint_idx][1].decode('utf-8')])
         # print(direc)
         print(self.driven_joint_info[joint_idx][1].decode('utf-8'))
-        target_pos = self.estimated_joint_state[self.driven_joint_info[joint_idx][1].decode('utf-8')][0] + np.radians(direc*0.5)
+        target_pos = self.estimated_joint_state[self.driven_joint_info[joint_idx][1].decode('utf-8')][0] + np.radians(direc*5)
         p.setJointMotorControl2(self.robot,
                                 self.driven_joint_info[joint_idx][0],
                                 p.POSITION_CONTROL,
@@ -124,7 +181,7 @@ class Robot(object):
             return np.array([0, 0, 1])
 
     # TODO: 駆動関節を判定
-    def get_drive_joint(self, target_pos=(0.1, 0.15, -0.5), target_qut=None):
+    def get_drive_joint(self, target_pos=(0.1, 0.15, -0.3), target_qut=None):
         # 手先と目標位置のベクトル
         '''
         getLinkStateの引数
@@ -225,15 +282,21 @@ class Robot(object):
 
 if __name__ == '__main__':
     robot = Robot()
+    # robot.set_camera()
+    # robot.get_image()
 
     try:
         while 1:
+
             robot.get_all_joint_state()
             # robot.control_joint_state()
             robot.get_all_link_info()
             # robot.get_drive_joint()
             robot.drive_joint()
+
             p.stepSimulation()
+            robot.set_camera()
+            robot.get_image()
             # time.sleep(0.1)
     except KeyboardInterrupt:
         pass
